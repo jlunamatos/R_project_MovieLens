@@ -1,0 +1,1062 @@
+#
+#title: 'Rating Prediction for MovieLens'
+#author: "José Alejandro Luna Matos"
+#date: "September 6, 2021"
+
+# MovieLens Project  
+
+#The goal of the project  is to build a recommendation system for movies using machine learning in R . 
+#In order to get that , the Data will be explored , transform and exploited.
+
+
+
+
+# Install  libraries 
+
+if(!require(tidyverse))  install.packages('tidyverse', repos = 'http://cran.us.r-project.org')
+if(!require(caret))      install.packages('caret', repos = 'http://cran.us.r-project.org')
+if(!require(data.table)) install.packages('data.table', repos = 'http://cran.us.r-project.org')
+if(!require(dplyr))      install.packages('dplyr', repos = 'http://cran.us.r-project.org')
+if(!require(ggplot2))    install.packages('ggplot2', repos = 'http://cran.us.r-project.org')
+if(!require(hexbin))     install.packages('hexbin', repos = 'http://cran.us.r-project.org')
+
+#Loading libraries 
+library(tidyverse) 
+library(caret)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+
+
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+#movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+#                                           title = as.character(title),
+#                                           genres = as.character(genres))
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+
+The function RMSE that it will used to observe effectiveness
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$
+
+RMSE <- function(real_ratings = NULL, predicted_ratings = NULL) {
+  sqrt(mean((real_ratings - predicted_ratings)^2))
+}
+
+#The name of columns,type and description of columns in both datasets are six:
+  
+#- **userId** ```<integer>```    Unique identification number for each user.
+#- **movieId** ```<numeric>```   Unique identification number for each movie.
+#- **rating** ```<numeric>```    Rating by one user of one movie . From 0.5 to 5 with 0.5 of increments.
+#- **timestamp** ```<integer>``` Timestamp for one specific rating provided by one user in seconds from 1970-01-01.
+#- **title** ```<character>```   title of each movie including the year of the release.
+#- **genres** ```<character>```  Genre of each movie separated by pipes.
+
+
+#The original dataset has been divided into 2 subsets "edx" and "validation" .
+
+#Dimension of movilens data sets "edx"   90 % of original dataset
+#edx
+dim(edx)
+
+#Dimension of movilens data sets  "validation"  10 % of original dataset
+#validation
+dim(validation)
+
+#A view of ten first rows of set edx
+head(edx,10)
+
+#Histogram of Rating distribution \
+#histogram of rating to see distribution , integers are used more than fractions
+edx%>%
+  ggplot(. , aes(x=.$rating)) +
+  geom_histogram(binwidth = 0.25,fill = "white",colour="blue",bins=10)+
+  xlab("Rating") + 
+  ylab("Count")+
+  ggtitle("Rating Distribution ")+
+  scale_y_continuous(breaks = c(seq(0, 3500000, 500000))) +
+  theme_light()
+#How many users and movies in edx subset ?
+edx %>% summarize(Users = n_distinct(userId),
+                  Movies = n_distinct(movieId)) 
+
+#Summary :  count,median , mean, max,1rd an 3rd quartiele by field 
+#The summary of the subsets "edx" and "validation" shows that there are no missing values.
+#Summary of **edx**
+
+summary(edx)
+
+#Summary of **validation**
+
+summary(validation)
+
+#another way 
+
+#Does exists missing values in any column?  No,it does not
+#**edx**
+
+sapply(edx, function(col) sum(is.na(col))) 
+
+#**validation**
+  
+sapply(validation, function(col) sum(is.na(col))) 
+
+
+#Users are not equally critical of their ratings, some users tend to give ratings 
+#much lower or higher than average. The next praphics includes only users who have 
+#rated at least 10 movies
+
+
+edx %>%
+  group_by(userId) %>%
+  filter(n() >= 10) %>%
+  summarize(avg_r = mean(rating)) %>%
+  ggplot(aes(avg_r)) +
+  geom_histogram(bins = 100, color = "green") +
+  xlab("Mean rating") +
+  ylab("Count of users") +
+  ggtitle("Distribution of users by average of rating ") +
+  scale_x_discrete(limits = c(seq(0.0,5,0.5))) +
+  theme_light()
+
+#it looks like normal distribution with center close to 3.6
+
+# Dataset Pre-Processing 
+
+#The pre-processing phase is composed by this steps (always in both datasets):
+  
+#1. Convert column timestamp to datetime format.
+#2. Extract the hour , day, month , the year and week day from the date.
+#3. Extract the year for each movie from the title.
+#4. Get antiquity.
+#5. Get number of rating per movie.
+#6. Separate each genre actually separated by pipe.
+#7. Get count genre per movie.
+#8. Convert columns to desidered data type.
+
+
+#Steps Development
+
+#1. Convert column timestamp to datetime format.
+
+edx$datetime        <- as.POSIXct(edx$timestamp, origin="1970-01-01")
+validation$datetime <- as.POSIXct(validation$timestamp, origin="1970-01-01")
+
+
+#2. Extract the hour , day, month , the year and week day from the date in both datasets 
+edx$weekday_Rate <- weekdays(edx$datetime)
+edx$hour_Rate <- format(edx$datetime,"%H")
+edx$year_Rate <- format(edx$datetime,"%Y")
+edx$month_Rate <- format(edx$datetime,"%m")
+validation$weekday_Rate <- weekdays(validation$datetime)
+validation$hour_Rate <- format(validation$datetime,"%H")
+validation$year_Rate <- format(validation$datetime,"%Y")
+validation$month_Rate <- format(validation$datetime,"%m")
+
+#3. Extract the year for each movie from the title.
+# edx 
+edx <- edx %>%
+  mutate(title = str_trim(title )) %>%
+  extract(title,
+          c("title_with_out_year", "year_movie"),
+          regex = "^(.*) \\(([0-9 \\-]*)\\)$",
+          remove = F) %>%
+  mutate(release = if_else(str_length(year_movie) >= 5,
+                           as.integer(str_split(year_movie, "-",simplify = T)[1]),
+                           as.integer(year_movie))
+  ) %>%
+  mutate(title = if_else(is.na(title_with_out_year),
+                         title,
+                         title_with_out_year)
+  ) %>%
+  select(-title_with_out_year)
+# validation 
+validation <- validation %>%
+  mutate(title = str_trim(title )) %>%
+  extract(title,
+          c("title_with_out_year", "year_movie"),
+          regex = "^(.*) \\(([0-9 \\-]*)\\)$",
+          remove = F) %>%
+  mutate(release = if_else(str_length(year_movie) >= 5,
+                           as.integer(str_split(year_movie, "-",simplify = T)[1]),
+                           as.integer(year_movie))
+  ) %>%
+  mutate(title = if_else(is.na(title_with_out_year),
+                         title,
+                         title_with_out_year)
+  ) %>%
+  select(-title_with_out_year)
+
+#The graphics below shows the distribution by year of movie
+
+edx%>%
+  ggplot(. , aes(x=release,y=rating)) + 
+  geom_bar(stat = "summary" ,fun = "mean",fill="khaki",colour="tan")
+
+
+#4.Get antiquity 
+#The figure shows that old movies have more rating tan news , except the olders
+
+
+edx<-edx %>%
+  mutate(antiquity = as.numeric(year_Rate)-as.numeric(release)) 
+validation<-validation %>%
+  mutate(antiquity = as.numeric(year_Rate)-as.numeric(release)) 
+
+edx %>%
+  ggplot(. , aes(x=.$antiquity,y=.$rating)) +
+  geom_bar(stat = "summary", fun = "mean",fill = "white", colour = "blue")+
+  xlab("Antiquity of Movie") + 
+  ylab("Average Rating")+
+  ggtitle("Average Rating by  Antiquity of Movie") 
+
+#There are some ratings with a error, the rating year is lower than the year of the movie
+#**edx** dataset 175 rows
+edx %>%
+  filter(antiquity<0)%>%
+  count()
+#**validation** dataset 26 rows
+
+validation %>%
+  filter(antiquity<0)%>%
+  count()
+
+#Two options :
+#1 correct the year of rating and antiquity
+#2 drop the rows
+
+#option 2 is taken
+edx<-edx %>%
+  filter(antiquity>=0)
+validation<-validation %>%
+  filter(antiquity>=0)  
+
+#In the next graphic : older movies have less ratings
+
+
+edx %>%
+  count(movieId,timestamp,userId,antiquity) %>%
+  count(antiquity) %>%
+  ggplot(aes(x=antiquity ,y=n)) +
+  geom_bar(stat = "summary", fun = "sum",fill = "white", colour = "green")+
+  xlab("Antiquity of Movie") + 
+  ylab("Count of Rating")+
+  ggtitle("Distribution of Rating by  Antiquity of Movie") 
+
+
+#5. Get number of rating per movie
+
+#The first 10 movieId and "How many ratings they have?"
+#aux df for calculation
+df_edx_cnt_rating<-edx %>%
+  group_by(movieId) %>%
+  summarise(cnt_ratings=n())
+head(df_edx_cnt_rating,10)   
+
+#More count of ratings mean High ratings per movies 
+
+
+edx<- edx %>% 
+  left_join(df_edx_cnt_rating,by='movieId')
+df_validation_cnt_rating<-edx %>%
+  group_by(movieId) %>%
+  summarise(cnt_ratings=n())
+validation<- validation %>% 
+  left_join(df_validation_cnt_rating,by='movieId')
+edx %>%
+  ggplot(. , aes(x=.$rating,y=.$cnt_ratings)) +
+  geom_bar(stat = "summary", fun = "mean",fill="pink",colour="blue")+
+  xlab("Rating") + 
+  ylab("Rating per movie")+
+  ggtitle("Average of Count of Rating per movie by  Rating value") 
+
+
+#More count of ratings are for less movies 
+
+edx%>%
+  ggplot(. , aes(x=.$cnt_ratings)) + 
+  geom_histogram(fill="blue",bins=100)+
+  xlab("Count of Rating per movie") + 
+  ylab("Count ")+
+  ggtitle("Distribution of Count of Rating per movie")
+
+#6.Get individual genre
+
+#Film noir have best average ratings as genre 
+# Extract the genre in edx datasets
+edx <- edx %>%
+  mutate(genre = fct_explicit_na(genres,na_level = "(No genres)")) %>%
+  separate_rows(genre,sep = "\\|")
+# Extract the genre in validation datasets
+validation <- validation %>%
+  mutate(genre = fct_explicit_na(genres,na_level = "(No genres)")) %>%
+  separate_rows(genre,sep = "\\|")
+
+edx %>% 
+  ggplot(., aes(x=.$genre, y=.$rating,fill=.$genre)) +
+  geom_boxplot()+stat_boxplot(geom = "errorbar",width = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(legend.position="none")+
+  xlab("Genre") + 
+  ylab("Rating")+
+  ggtitle("Rating by Genre") 
+
+edx %>% 
+  ggplot(., aes(x=.$genre)) +
+  geom_histogram(stat="count",fill = "white", colour = "blue")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  xlab("Genre") + 
+  ylab("Count ")+
+  ggtitle("Distribution by Genre")
+#7. Get count genre per movie
+#The figure shows a little relation between the rating and the number of genres per movie\
+
+# Extract the count of genre in edx datasets
+#aux df for calculation
+df_edx_count_genres<-edx %>%
+  group_by(movieId,userId,datetime) %>%
+  summarise(count_genres=n())
+edx<- edx %>% 
+  left_join(df_edx_count_genres,by=c("movieId" = "movieId", "userId" = "userId", "datetime" = "datetime"))
+df_val_count_genres<-validation %>%
+  group_by(movieId,userId,datetime) %>%
+  summarise(count_genres=n())
+validation<- validation %>% 
+  left_join(df_val_count_genres,by=c("movieId" = "movieId", "userId" = "userId", "datetime" = "datetime"))
+
+
+#edx<-edx%>%
+#   mutate(count_genres=(sum(charToRaw(.$genres) == charToRaw("|") )+1) )
+#validation<-validation%>%
+#   mutate(count_genres=sum(charToRaw(.$genres) == charToRaw("|") ))
+edx %>%
+  ggplot(. , aes(x=.$rating,y=.$count_genres)) +
+  geom_bar(stat = "summary", fun = "mean",fill = "white", colour = "red")+
+  xlab("Rating")+ 
+  ylab("Average Count of Genres per Movie")+
+  ggtitle("Average Count of Genres per Movie by Rating") 
+
+#8. Convert columns to desidered data type 
+edx$hour_Rate <- as.numeric(edx$hour_Rate)
+edx$year_Rate <- as.numeric(edx$year_Rate)
+edx$month_Rate <- as.numeric(edx$month_Rate)
+edx$release <- as.numeric(edx$release)
+edx$year_movie <- as.numeric(edx$year_movie)
+
+validation$hour_Rate <- as.numeric(validation$hour_Rate)
+validation$year_Rate <- as.numeric(validation$year_Rate)
+validation$month_Rate <- as.numeric(validation$month_Rate)
+validation$release <- as.numeric(validation$release)
+validation$year_movie <- as.numeric(validation$year_movie)
+
+
+#Remove unnecessary columns on edx and validation dataset
+edx <-edx%>% 
+  select(userId, movieId, rating, title, genre, release, weekday_Rate, 
+         hour_Rate, year_Rate, month_Rate,count_genres,antiquity,cnt_ratings)
+validation <- validation %>% 
+  select(userId, movieId, rating, title, genre, release, weekday_Rate, 
+         hour_Rate, year_Rate, month_Rate,count_genres,antiquity,cnt_ratings)
+#Summary to see is there are NA values count, median,mean ,min,max,1rd an 3rd quartiele
+summary(edx)
+
+
+#After preprocessing the data, **edx** dataset looks like this:
+  
+#  **Processed edx datadaset**
+  
+# Output the processed dataset
+head(edx) 
+
+
+
+
+# Model Building and Evaluation
+
+## Naive Baseline Model
+
+#Naive Model predict the average of all movie ratings is approximately 3.53
+
+
+paste("The mean of rating in edx set is:", as.character(mean(edx$rating)))
+
+## Model 1 : Naive Mean-Baseline 
+
+#The formula used for this model:
+  
+#  $$Y_{u,i} = \hat{\mu} + \varepsilon_{u,i}$$
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent sampled errors.
+
+mu_hat <- mean(edx$rating)
+rmse_model_1 <- RMSE(validation$rating, mu_hat)
+c_model<-"Model 1: Naive Mean Baseline  "
+results <- data.frame(model=c_model, RMSE=rmse_model_1)
+tibble(Method = c_model, RMSE = rmse_model_1)
+
+## Model 2 : Movie-Based Model, a Content-based Approach
+
+#The first Non-Naive Model takes into account the content. In this case the movies that are rated higher or lower resperct to each other.
+
+#The formula used is:
+  
+#  $$Y_{u,i} = \hat{\mu} + b_i + \epsilon_{u,i}$$
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$.
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+# Graph the Movie Bias
+movie_avgs %>% ggplot(aes(b_i)) +
+  geom_histogram(color = "black", fill = "pink", bins = 100) +
+  xlab("Movie Bias") +
+  ylab("Count ") +
+  theme_bw()
+
+# Compute the predicted ratings on validation dataset
+rmse_movie_model <- validation %>%
+  left_join(movie_avgs, by='movieId') %>%
+  mutate(pred = mu_hat + b_i) %>%
+  pull(pred)
+rmse_model_2 <- RMSE(validation$rating, rmse_movie_model)
+# Adding results to the results dataset
+c_model<-"Model 2: Movie-Based Model  "
+results <- results %>% add_row(model=c_model, RMSE=rmse_model_2)
+tibble(Method = c_model, RMSE = rmse_model_2)
+
+
+#The RMSE on the **validation** dataset is **0.94107**. It better than the Naive Mean-Baseline Model, but it is also very far from the target RMSE (below 0.87) and that indicates poor performance for the model.
+
+## Model 3: Movie + User Model, a User-based approach
+
+#The second Non-Naive Model consider that the users have different tastes and rate differently.
+
+#The formula used is:
+  
+#  $$Y_{u,i} = \hat{\mu} + b_i + b_u + \epsilon_{u,i}$$
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$.
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu_hat - b_i))
+# Graph the User Bias
+user_avgs %>% ggplot(aes(b_u)) +
+  geom_histogram(color = "black", fill = "red", bins = 10) +
+  xlab("User Bias") +
+  ylab("Count ") +
+  theme_bw()
+
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_model <- validation %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu_hat + b_i + b_u) %>%
+  pull(pred)
+rmse_model_3 <- RMSE(validation$rating, rmse_movie_user_model)
+# Adding the results to the results dataset
+c_model<-"Model 3: Movie+User Based Model  "
+results <- results %>% add_row(model=c_model, RMSE=rmse_model_3)
+tibble(Method = c_model, RMSE = rmse_model_3)
+
+
+#The RMSE on the **validation** dataset is **0.86337** and this is very good. The Movie+User Based Model reaches the desidered performance but applying the regularization techniques, can improve the performance just a little.
+
+## Model 4 : Movie + User + Genre Model, the Genre Popularity
+
+#The formula used is:
+  
+#  $$Y_{u,i} = \hat{\mu} + b_i + b_u + b_{u,g} + \epsilon_{u,i}$$
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$. The  $b_{u,g}$ is a measure for how much a user $u$ likes the genre $g$.
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu_hat - b_i))
+genre_pop <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genre) %>%
+  summarize(b_u_g = mean(rating - mu_hat - b_i - b_u))
+
+# Graph the Genre Popularity Bias
+genre_pop %>% ggplot(aes(b_u_g)) +
+  geom_histogram(color = "black", fill = "Green", bins = 100) +
+  xlab("Genre Bias") +
+  ylab("Count ") +
+  theme_bw()
+
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_genre_model <- validation %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_pop, by='genre') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_g) %>%
+  pull(pred)
+rmse_model_4 <- RMSE(validation$rating, rmse_movie_user_genre_model)
+# Adding the results to the results dataset
+c_model<-"Model 4:Movie+User+Genre Based Model  "
+results <- results %>% add_row(model=c_model, RMSE=rmse_model_4)
+tibble(Method = c_model, RMSE = rmse_model_4)
+
+
+#The RMSE on the **validation** dataset is **0.86327** and this is very good.  The Movie+User+Genre Based Model reaches the desidered performance but adding the ```genre``` predictor, doesn't improve significantly the model's performance. Applying the regularization techniques, can improve the performance just a little.
+
+
+
+## Model 5:Movie + User + Genre + Antiquity Model, the Antiquity  Popularity
+
+#The formula used is:
+  
+#  $$Y_{u,i} = \hat{\mu} + b_i + b_u + b_{u,g}  + b_a + \epsilon_{u,i}$$
+  
+  
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. 
+#The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. 
+#The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$. 
+#The  $b_{u,g}$ is a measure for how much a user $u$ likes the genre $g$.
+#The  $b_a$ is a measure for the antiquity of movie $i$, i.e. the bias of antiquity of movie $i$. 
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu_hat - b_i))
+
+genre_pop <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genre) %>%
+  summarize(b_u_g = mean(rating - mu_hat - b_i - b_u))
+
+antiquity_avg <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_pop, by='genre') %>%
+  group_by(antiquity) %>%
+  summarize(b_a = mean(rating - mu_hat - b_i - b_u - b_u_g))
+
+# Graph the antiquity Popularity Bias
+antiquity_avg %>% ggplot(aes(b_a)) +
+  geom_histogram(color = "black", fill = "deepskyblue", bins = 100) +
+  xlab("Antiquity Bias") +
+  ylab("Count ") +
+  theme_bw()
+
+
+
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_genre_antiquity_model <- validation %>%
+  left_join(movie_avgs,    by='movieId') %>%
+  left_join(user_avgs,     by='userId') %>%
+  left_join(genre_pop,     by='genre') %>%
+  left_join(antiquity_avg, by='antiquity') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_g + b_a) %>%
+  pull(pred)
+rmse_model_5 <- RMSE(validation$rating, rmse_movie_user_genre_antiquity_model)
+# Adding the results to the results dataset
+c_model<-"Movie+User+Genre+Antiquity Based Model  "
+results <- results %>% add_row(model=c_model, RMSE=rmse_model_5)
+tibble(Method = c_model, RMSE = rmse_model_5)
+
+
+#The RMSE on the **validation** dataset is **0.86274** and this is very good.  The Movie+User+Genre+Antiquity Based Model reaches the desidered performance but adding the ```Antiquity``` predictor, doesn't improve significantly the model's performance. Applying the regularization techniques, can improve the performance just a little.
+
+
+
+## Model 6: Movie + User + Genre + Antiquity +Count Rating Model
+
+#The formula used is:
+  
+#  $$Y_{u,i} = \hat{\mu} + b_i + b_u + b_{u,g}  + b_a +  b_c + \epsilon_{u,i}$$
+  
+  
+  
+  
+  
+#  With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. 
+#The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. 
+#The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$. 
+#The  $b_{u,g}$ is a measure for how much a user $u$ likes the genre $g$.
+#The  $b_a$ is a measure for the antiquity of movie $i$, i.e. the bias of antiquity of movie $i$. 
+#The  $b_c$ is a measure for the count of rating of movie $i$, i.e. the bias of count of rating of movie $i$. 
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Calculate the average by movie
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+# Calculate the average by user
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu_hat - b_i))
+
+genre_pop <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genre) %>%
+  summarize(b_u_g = mean(rating - mu_hat - b_i - b_u))
+
+antiquity_avg <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_pop, by='genre') %>%
+  group_by(antiquity) %>%
+  summarize(b_a = mean(rating - mu_hat - b_i - b_u - b_u_g))
+
+cant_rating_avg <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_pop, by='genre') %>%
+  left_join(antiquity_avg, by='antiquity') %>%
+  group_by(cnt_ratings) %>%
+  summarize(b_c = mean(rating - mu_hat - b_i - b_u - b_u_g - b_a ))
+# Graph the count rating  Bias
+cant_rating_avg %>% ggplot(aes(b_c)) +
+  geom_histogram(color = "black", fill = "yellow", bins = 100) +
+  xlab("Count Rating Bias") +
+  ylab("Count ") +
+  theme_bw()
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_genre_antiquity_cant_rating_model <- validation %>%
+  left_join(movie_avgs,      by='movieId') %>%
+  left_join(user_avgs,       by='userId') %>%
+  left_join(genre_pop,       by='genre') %>%
+  left_join(antiquity_avg,   by='antiquity') %>%
+  left_join(cant_rating_avg, by='cnt_ratings') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_g + b_a + b_c) %>%
+  pull(pred)
+rmse_model_6 <- RMSE(validation$rating, rmse_movie_user_genre_antiquity_cant_rating_model)
+# Adding the results to the results dataset
+c_model<-"Model 6: Movie + User + Genre + Antiquity +Count Rating Model  "
+results <- results %>% 
+  add_row(model=c_model,RMSE=rmse_model_6)
+tibble(Method = c_model, RMSE = rmse_model_6)
+
+
+#The RMSE on the **validation** dataset is **0.86187** and this is very good.  The Movie+User+Genre+Antiquity Based Model reaches the desidered performance but adding the ```Antiquity``` predictor, doesn't improve significantly the model's performance. Applying the regularization techniques, can improve the performance just a little.
+
+
+
+## Regularization
+
+#It allows to add a penalty $\lambda$ (lambda) to penalizes movies with large estimates from a small sample size. In order to optimize $b_i$, it necessary to use this equation:
+  
+#  $$\frac{1}{N} \sum_{u,i} (y_{u,i} - \mu - b_{i})^{2} + \lambda \sum_{i} b_{i}^2$$   
+  
+#  reduced to this equation:   
+  
+#  $$\hat{b_{i}} (\lambda) = \frac{1}{\lambda + n_{i}} \sum_{u=1}^{n_{i}} (Y_{u,i} - \hat{\mu}) $$  
+  
+  ### Regularized Movie-Based Model
+  
+  
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 10, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+  
+  
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    mutate(pred = mu_hat + b_i) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "RMSEs vs Lambdas - Regularized Movie Based Model",
+       y = "RMSEs",
+       x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_reg_model_2 <- min(rmses)
+# Adding the results to the results dataset
+c_model<-"Regularized Movie-Based Model"
+results <- results %>% add_row(model=c_model, RMSE=rmse_reg_model_2)
+tibble(Method = c_model, RMSE = rmse_reg_model_2)
+
+
+#The RMSE on the **validation** dataset is **0.94103** and this is better than without Regularized. The Movie Based Model is not reaches yet the desired performance but applying the regularization techniques improve it just a little.
+
+### Regularized Movie+User Model
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 25, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+  
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    mutate(pred = mu_hat + b_i + b_u) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "RMSEs vs Lambdas - Regularized Movie+User Model",
+       y = "RMSEs",
+       x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_reg_model_3 <- min(rmses)
+# Adding the results to the results dataset
+c_model<-"Regularized Movie+User Based Model"
+results <- results %>% add_row(model=c_model, RMSE=rmse_reg_model_3)
+tibble(Method = c_model, RMSE = rmse_reg_model_3)
+
+
+#The RMSE on the **validation** dataset is **0.86275**. The Regularized Movie+User Based Model improves just a little the result of the Non-Regularized Model.
+
+### Regularized Movie+User+Genre Model
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 25, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+  
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  
+  b_u_g <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(genre) %>%
+    summarize(b_u_g = sum(rating - b_i - mu_hat - b_u) / (n() + lambda))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_g) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "RMSEs vs Lambdas - Regularized Movie+User+Genre Model",
+       y = "RMSEs",
+       x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_reg_model_4 <- min(rmses)
+# Adding the results to the results dataset
+c_model<-"Regularized Movie+User+Genre Based Model "
+results <- results %>% add_row(model=c_model, RMSE=rmse_reg_model_4)
+tibble(Method = c_model, RMSE = rmse_reg_model_4)
+
+
+#The RMSE on the **validation** dataset is **0.86267** . 
+#The Regularized Movie+User+Genre Based Model improves just a little the result of the Non-Regularized Model. 
+#As the Non-Regularized Model, the ```genre``` predictor doesn't improve significantly the model's performance.
+
+
+### Regularized Movie+User+Genre+Antiquity Model
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 25, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  
+  b_u_g <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(genre) %>%
+    summarize(b_u_g = sum(rating - b_i - mu_hat - b_u) / (n() + lambda))
+  
+  b_a <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    group_by(antiquity) %>%
+    summarize(b_a = sum(rating - b_i - mu_hat - b_u - b_u_g ) / (n() + lambda))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    left_join(b_a, by='antiquity') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_g + b_a) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+title_gg<-"RMSEs vs Lambdas - Regularized Movie+User+Genre+Antiquity Model"
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = title_gg,
+       y = "RMSEs",
+       x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_reg_model_5 <- min(rmses)
+# Adding the results to the results dataset
+c_model<-"Regularized Movie+User+Genre+Antiquity Based Model"
+results <- results %>% 
+  add_row(model=c_model,RMSE=rmse_reg_model_5)
+tibble(Method = c_model, RMSE = rmse_reg_model_5)
+
+
+#The RMSE on the **validation** dataset is **0.86211**. 
+#The Regularized Movie+User+Genre+Antiquity Base Model improves just a little the result of the Non-Regularized Model. 
+#As the Non-Regularized Model, the ```Antiquity``` predictor doesn't improve significantly the model's performance.
+
+
+
+### Regularized Movie+User+Genre+Antiquity+count Rating Model
+
+
+# Calculate the average of all movies
+mu_hat <- mean(edx$rating)
+# Define a table of lambdas
+lambdas <- seq(0, 25, 0.1)
+# Compute the predicted ratings on validation dataset using different values of lambda
+rmses <- sapply(lambdas, function(lambda) {
+  
+  # Calculate the average by user
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  
+  # Calculate the average by user
+  
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  
+  b_u_g <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(genre) %>%
+    summarize(b_u_g = sum(rating - b_i - mu_hat - b_u) / (n() + lambda))
+  
+  b_a <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    group_by(antiquity) %>%
+    summarize(b_a = sum(rating - b_i - mu_hat - b_u - b_u_g ) / (n() + lambda))
+  
+  b_c <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    left_join(b_a, by='antiquity') %>%
+    group_by(cnt_ratings) %>%
+    summarize(b_c = sum(rating - b_i - mu_hat - b_u - b_u_g - b_a) / (n() + lambda))
+  
+  # Compute the predicted ratings on validation dataset
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_g, by='genre') %>%
+    left_join(b_a, by='antiquity') %>%
+    left_join(b_c, by='cnt_ratings') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_g + b_a + b_c) %>%
+    pull(pred)
+  
+  # Predict the RMSE on the validation set
+  
+  return(RMSE(validation$rating, predicted_ratings))
+})
+# plot the result of lambdas
+title_gg<-"RMSEs vs Lambdas - Regularized Movie+User+Genre+Antiquity+Cant Rating Model"
+df <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(df, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = title_gg,
+       y = "RMSEs",
+       x = "lambdas")
+# Get the lambda value that minimize the RMSE
+min_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+rmse_reg_model_6 <- min(rmses)
+# Adding the results to the results dataset
+c_model<-"Regularized Movie+User+Genre+Antiquity+Count Rating Based Model"
+results <- results %>% 
+  add_row(model=c_model, RMSE=rmse_reg_model_6)
+tibble(Method = c_model, RMSE = rmse_reg_model_6)
+
+
+#The RMSE on the **validation** dataset is **0.86135** and this is the best result of the builted models. 
+#The Regularized Movie+User+Genre+Antiquity+count Rating  Model improves just a little the result of the Non-Regularized Model. As in the Non-Regularized Model, the **count Rating** predictor doesn't improve significantly the model's performance.
+
+
+# Additional notes
+#The kable function was used at the begginig, but when pdf was generated it does work (using MikTex in Windows 10).
+#weekday_Rate was not use in any model because that was indifferent.
+#hour_Rate was not use in any model because that was indifferent.
+#year_Rate was not use in any model because that was indifferent except 1995 when the avg was 4, but for future It will does not make sense.
+
+
+# Results
+
+#This is the summary results for all the model builted, trained on **edx** dataset and validated on the **validation** dataset.
+
+
+# Shows the results
+results 
+
